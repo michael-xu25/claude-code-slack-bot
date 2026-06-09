@@ -2,6 +2,7 @@ import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ConversationSession } from './types';
 import { Logger } from './logger';
 import { McpManager, McpServerConfig } from './mcp-manager';
+import { applyReadOnlyForBotTurn } from './agent-chat-guard';
 
 export class ClaudeHandler {
   private sessions: Map<string, ConversationSession> = new Map();
@@ -37,7 +38,8 @@ export class ClaudeHandler {
     session?: ConversationSession,
     abortController?: AbortController,
     workingDirectory?: string,
-    slackContext?: { channel: string; threadTs?: string; user: string }
+    slackContext?: { channel: string; threadTs?: string; user: string },
+    chain?: { isFromBot: boolean; hop: number; atLimit: boolean }
   ): AsyncGenerator<SDKMessage, void, unknown> {
     const options: any = {
       outputFormat: 'stream-json',
@@ -87,9 +89,10 @@ export class ClaudeHandler {
     this.logger.debug('Claude query options', options);
 
     try {
+      const effectiveOptions = chain ? applyReadOnlyForBotTurn(options, chain) : options;
       for await (const message of query({
         prompt,
-        options: { ...options, abortController: abortController || new AbortController() },
+        options: { ...effectiveOptions, abortController: abortController || new AbortController() },
       })) {
         if (message.type === 'system' && message.subtype === 'init') {
           if (session) {

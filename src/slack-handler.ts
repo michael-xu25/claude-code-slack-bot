@@ -8,6 +8,7 @@ import { TodoManager, Todo } from './todo-manager';
 import { McpManager } from './mcp-manager';
 import { permissionServer } from './permission-mcp-server';
 import { config } from './config';
+import { inspectInbound, applyReadOnlyForBotTurn, stampOutgoing, MAX_HOPS } from './agent-chat-guard';
 
 interface MessageEvent {
   user: string;
@@ -244,7 +245,9 @@ export class SlackHandler {
         user
       };
       
-      for await (const message of this.claudeHandler.streamQuery(finalPrompt, session, abortController, workingDirectory, slackContext)) {
+      const chain = (this as any)._pendingChain || { isFromBot: false, hop: 0, atLimit: false };
+      (this as any)._pendingChain = null; // consume it
+      for await (const message of this.claudeHandler.streamQuery(finalPrompt, session, abortController, workingDirectory, slackContext, chain)) {
         if (abortController.signal.aborted) break;
 
         this.logger.debug('Received message from Claude SDK', {
@@ -312,7 +315,9 @@ export class SlackHandler {
           if (message.subtype === 'success' && (message as any).result) {
             const finalResult = (message as any).result;
             if (finalResult && !currentMessages.includes(finalResult)) {
-              const formatted = this.formatMessage(finalResult, true);
+              const botMentionRe = /<@[A-Z0-9]+>|@(gilbert|kathryne|charizard)\b/gi;
+              const stamped = stampOutgoing(finalResult, chain, botMentionRe);
+              const formatted = this.formatMessage(stamped, true);
               await say({
                 text: formatted,
                 thread_ts: thread_ts || ts,
@@ -730,11 +735,21 @@ export class SlackHandler {
     // Handle app mentions
     this.app.event('app_mention', async ({ event, say }) => {
       this.logger.info('Handling app mention event');
-      const text = event.text.replace(/<@[^>]+>/g, '').trim();
-      await this.handleMessage({
-        ...event,
-        text,
-      } as MessageEvent, say);
+      const botId = (event as any).bot_id as string | undefined;
+      const rawText = (event as any).text as string | undefined;
+
+      // Bounded bot-to-bot: inspect inbound for bot-author + hop count.
+      const chain = inspectInbound(botId, rawText);
+
+      // Hard stop: if the inbound already passed the limit, do not respond at all.
+      if (chain.isFromBot && chain.hop >= MAX_HOPS) {
+        this.logger.info('Bot-to-bot chain at/over limit; ignoring', { hop: chain.hop });
+        return;
+      }
+
+      const text = rawText ? rawText.replace(/<@[^>]+>/g, '').trim() : '';
+      (this as any)._pendingChain = chain; // stash for handleMessage
+      await this.handleMessage({ ...event, text } as MessageEvent, say);
     });
 
     // Handle file uploads in threads
