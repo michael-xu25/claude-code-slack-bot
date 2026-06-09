@@ -121,6 +121,10 @@ export class WorkingDirectoryManager {
       return channelConfig.directory;
     }
 
+    if (config.baseDirectory) {
+      this.logger.debug('Falling back to base directory', { baseDirectory: config.baseDirectory });
+      return config.baseDirectory;
+    }
     this.logger.debug('No working directory configured', { channelId, threadTs });
     return undefined;
   }

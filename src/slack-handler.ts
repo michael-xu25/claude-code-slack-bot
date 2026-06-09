@@ -1,6 +1,6 @@
 import { App } from '@slack/bolt';
 import { ClaudeHandler } from './claude-handler';
-import { SDKMessage } from '@anthropic-ai/claude-code';
+import { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { Logger } from './logger';
 import { WorkingDirectoryManager } from './working-directory-manager';
 import { FileHandler, ProcessedFile } from './file-handler';
@@ -715,8 +715,14 @@ export class SlackHandler {
   setupEventHandlers() {
     // Handle direct messages
     this.app.message(async ({ message, say }) => {
-      if (message.subtype === undefined && 'user' in message) {
-        this.logger.info('Handling direct message event');
+      // Ignore anything from a bot (prevents bots triggering each other / loops)
+      if ((message as any).bot_id || (message as any).subtype === 'bot_message') {
+        return;
+      }
+      // Only auto-respond in DMs. In channels, require an @mention (handled below).
+      const isDM = typeof (message as any).channel === 'string' && (message as any).channel.startsWith('D');
+      if (message.subtype === undefined && 'user' in message && isDM) {
+        this.logger.info('Handling direct message (DM) event');
         await this.handleMessage(message as MessageEvent, say);
       }
     });
